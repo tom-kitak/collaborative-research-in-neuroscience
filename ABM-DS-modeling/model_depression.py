@@ -12,6 +12,7 @@ class Person(Agent):
         # Options: depression, healthy, depression_treated, depression_untreated, healthy_treated
 
     def act(self, time, round_no, step_no):
+        # print("Agent time:", time)
         act_of_god = random.random()
         if self.state == "healthy":
             if act_of_god < 0.3:
@@ -22,6 +23,14 @@ class Person(Agent):
 
     def __repr__(self):
         return self.state
+
+
+def update_patient_demand(m, t):
+    """"For debugging purposes"""
+    # print("---------------------------------")
+    # print(f"SD time:              {t}")
+    # print(f"SD depression demand: {m.exchange['depression_demand']}")
+    return m.exchange["depression_demand"]
 
 
 class DepressionTreatmentSD:
@@ -44,15 +53,15 @@ class DepressionTreatmentSD:
         self.treatment_success_rate = model.constant("treatment_success_rate")
         self.enter_treatment_rate = model.constant("enter_treatment_rate")
 
-        # Functions
-        # We are using time parameter to pass demand information -> very sus >:| but I don't know how else to pass info
-        update_function = model.function("update_function", lambda m, t: t)
-
         # Equations
         self.treated.equation = self.incoming_patients - self.outgoing_patients
         self.incoming_patients.equation = self.enter_treatment
         self.outgoing_patients.equation = self.treated * self.treatment_success_rate
-        self.patient_demand.equation = update_function()
+
+        # self.patient_demand.equation = self.model.function("update_function",
+        #     lambda m, t: m._exchange["depression_demand"])()
+        self.patient_demand.equation = self.model.function("update_function", update_patient_demand)()
+
         self.enter_treatment.equation = self.enter_treatment_rate * self.patient_demand
         self.untreated.equation = (1 - self.enter_treatment_rate) * self.patient_demand
 
@@ -64,15 +73,20 @@ class DepressionTreatmentHybrid(Model):
     def instantiate_model(self):
         super().instantiate_model()
         self.register_agent_factory("person", lambda agent_id, model, properties: Person(agent_id, model, properties))
-        self.sd_model = DepressionTreatmentSD(self)
+
+        self.sd_model = None
+        self.exchange = {}
+        self.exchange["depression_demand"] = 0
+
 
     def configure(self, config):
         super().configure(config)
+        self.sd_model = DepressionTreatmentSD(self)
 
         self.sd_model.treatment_success_rate.equation = self.treatment_success_rate
         self.sd_model.enter_treatment_rate.equation = self.enter_treatment_rate
 
-    def begin_round(self, time, sim_round, step):
+    def end_round(self, time, sim_round, step):
 
         depression_demand = 0
         update_enter_treatment = int(self.evaluate_equation("enter_treatment", time))
@@ -92,8 +106,15 @@ class DepressionTreatmentHybrid(Model):
                 if update_outgoing_patients > 0:
                     agent.state = "healthy_treated"
                     update_outgoing_patients -= 1
-
-        self.sd_model.patient_demand(depression_demand)
+                else:
+                    # Adding monetary costs for as long as they are treated
+                    treatment_cost = 1
+                    agent.set_property_value("monetary_cost", agent.get_property_value("monetary_cost")
+                                             + treatment_cost)
+        # print("+++++++++++++++++++++++++++++++++")
+        # print(f"Hybrid time:          {time}")
+        # print(f"Hybrid dep demand:    {depression_demand}")
+        self.exchange["depression_demand"] = depression_demand
 
 
 if __name__ == "__main__":
@@ -126,7 +147,13 @@ if __name__ == "__main__":
             [
                 {
                     "name": "person",
-                    "count": 100
+                    "count": 100,
+                    "properties": {
+                        "monetary_cost": {
+                            "type": "Integer",
+                            "value": 0
+                        }
+                    }
                 }
             ]
     }
